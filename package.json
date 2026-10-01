@@ -1,0 +1,11 @@
+{
+  "name": "huntikins-vault-images",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "ingest": "node scripts/ingest-intake.mjs",
+    "validate": "node scripts/validate-image-names.mjs images"
+  }
+}

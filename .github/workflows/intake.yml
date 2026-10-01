@@ -1,0 +1,91 @@
+name: Photo intake
+
+# Upload photos to intake/ in a pull request; this workflow scrubs, names,
+# indexes and squash-merges them. Only PRs opened by the owner from a branch in
+# this repo are processed, and only if they touch nothing but intake/ and the
+# generated image files.
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - 'intake/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: photo-intake
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'huntikins'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Refuse PRs that touch anything but photos
+        run: |
+          bad=$(gh pr view "$PR" --json files --jq '.files[].path' \
+            | grep -vE '^(intake/|images/|index\.json$|index\.html$|sitemap\.xml$)' || true)
+          if [ -n "$bad" ]; then
+            printf '### Not an intake-only pull request — not processed\n\nThis workflow only auto-merges changes to `intake/`. These files are outside it:\n\n%s\n' \
+              "$(printf '%s\n' "$bad" | sed 's/^/- `/; s/$/`/')" > /tmp/report.md
+            gh pr comment "$PR" --body-file /tmp/report.md
+            exit 1
+          fi
+
+      - name: Bring branch up to date with main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          git merge --no-edit origin/main || {
+            printf '### Could not update this branch from main\n\nResolve the conflict (or recreate the pull request) and push again.\n' > /tmp/report.md
+            gh pr comment "$PR" --body-file /tmp/report.md
+            exit 1
+          }
+
+      - name: Ingest intake/
+        run: |
+          set +e
+          node scripts/ingest-intake.mjs --report-md /tmp/report.md
+          rc=$?
+          gh pr comment "$PR" --body-file /tmp/report.md
+          exit $rc
+
+      - name: Verify the result
+        run: |
+          node scripts/validate-image-names.mjs images
+          mapfile -t imgs < <(find images -type f \( -iname '*.jpg' -o -iname '*.png' \))
+          [ ${#imgs[@]} -eq 0 ] || node scripts/scrub-image-metadata.mjs --check "${imgs[@]}"
+
+      - name: Commit the result to the PR branch
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "Publish intake photos"
+            git push origin "HEAD:$HEAD_REF"
+          fi
+
+      - name: Squash-merge
+        run: gh pr merge "$PR" --squash --delete-branch --subject "Publish intake photos (#$PR)"

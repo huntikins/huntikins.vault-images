@@ -1,0 +1,52 @@
+name: Image metadata check
+
+# Backstop for every path into this repo. Fails if any committed image still
+# carries metadata, is misnamed, or if the generated index is stale.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scrub-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Unit tests
+        run: node --test "test/*.test.mjs"
+
+      - name: Check every image for residual metadata
+        run: |
+          mapfile -t imgs < <(find images -type f \
+            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \
+               -o -iname '*.heic' -o -iname '*.heif' -o -iname '*.webp' -o -iname '*.tif*' \) 2>/dev/null || true)
+          if [ ${#imgs[@]} -eq 0 ]; then
+            echo "No images to check."; exit 0
+          fi
+          echo "Checking ${#imgs[@]} image(s)..."
+          node ./scripts/scrub-image-metadata.mjs --check "${imgs[@]}"
+
+      - name: Check image naming and hashes
+        run: node ./scripts/validate-image-names.mjs images
+
+      - name: Regenerate index and sitemap
+        run: |
+          node ./scripts/build-image-site.mjs . --base-url "https://huntikins.github.io/huntikins.vault-images/"
+          [ -z "$(git status --porcelain -- index.json index.html sitemap.xml)" ] \
+            || { echo "index.json/index.html/sitemap.xml are stale — run scripts/build-image-site.mjs and commit"; exit 1; }
