@@ -159,3 +159,107 @@ test('parseIntakeName', () => {
     assert.equal(parseIntakeName(bad).ok, false, bad);
   }
 });
+
+const BODY = (...lines) => `Some text\n\n\`\`\`\n${lines.join('\n')}\n\`\`\`\n`;
+const idx = (root) => JSON.parse(readFileSync(join(root, 'index.json'), 'utf8'));
+
+test('mapping: positional lines name front, back, then detail-N', () => {
+  const root = tmpRepo();
+  for (const n of [6513, 6514, 6515, 6516, 6517]) put(root, `intake/IMG_${n}.JPG`, makeJpeg({ tag: String(n) }));
+  const out = ingest(root, { prBody: BODY('INV-0010: IMG_6513 IMG_6514', 'INV-0011: IMG_6515 IMG_6516 IMG_6517') });
+  assert.equal(out.ok, true, out.problems.join('\n'));
+  const index = idx(root);
+  assert.deepEqual(Object.keys(index['INV-0010']), ['front', 'back']);
+  assert.deepEqual(Object.keys(index['INV-0011']), ['front', 'back', 'detail-1']);
+  assert.equal(readdirSync(join(root, 'intake')).length, 0);
+});
+
+test('mapping: explicit view form', () => {
+  const root = tmpRepo();
+  for (const n of [6513, 6514, 6520]) put(root, `intake/IMG_${n}.jpg`, makeJpeg({ tag: String(n) }));
+  const out = ingest(root, { prBody: BODY('INV-0010 front=IMG_6513 back=IMG_6514 corner-tl=IMG_6520') });
+  assert.equal(out.ok, true, out.problems.join('\n'));
+  assert.deepEqual(Object.keys(idx(root)['INV-0010']), ['front', 'back', 'corner-tl']);
+});
+
+test('mapping: mixed upload of mapped and pre-named files', () => {
+  const root = tmpRepo();
+  put(root, 'intake/IMG_1.jpg', makeJpeg({ tag: '1' }));
+  put(root, 'intake/IMG_2.jpg', makeJpeg({ tag: '2' }));
+  put(root, 'intake/INV-0020-front.jpg', makeJpeg({ tag: '3' }));
+  const out = ingest(root, { prBody: BODY('INV-0010: IMG_1 IMG_2') });
+  assert.equal(out.ok, true, out.problems.join('\n'));
+  assert.deepEqual(Object.keys(idx(root)), ['INV-0010', 'INV-0020']);
+});
+
+test('mapping: files named INV-NNNN-view work with no body at all', () => {
+  const root = tmpRepo();
+  put(root, 'intake/INV-0001-front.jpg', makeJpeg());
+  assert.equal(ingest(root, { prBody: '' }).ok, true);
+  const second = tmpRepo();
+  put(second, 'intake/INV-0001-front.jpg', makeJpeg());
+  assert.equal(ingest(second, { prBody: null }).ok, true);
+});
+
+test('mapping: an unmapped, unnamed file fails everything', () => {
+  const root = tmpRepo();
+  put(root, 'intake/IMG_1.jpg', makeJpeg({ tag: '1' }));
+  put(root, 'intake/IMG_2.jpg', makeJpeg({ tag: '2' }));
+  put(root, 'intake/IMG_3.jpg', makeJpeg({ tag: '3' }));
+  const out = ingest(root, { prBody: BODY('INV-0010: IMG_1 IMG_2') });
+  assert.equal(out.ok, false);
+  assert.equal(out.problems.length, 1);
+  assert.match(out.problems[0], /IMG_3\.jpg.*not named.*pull request description/);
+  assert.ok(existsSync(join(root, 'intake/IMG_1.jpg')));
+  assert.deepEqual(readdirSync(join(root, 'images')), []);
+});
+
+test('mapping: a mapped name with no file is reported', () => {
+  const root = tmpRepo();
+  put(root, 'intake/IMG_1.jpg', makeJpeg());
+  const out = ingest(root, { prBody: BODY('INV-0010: IMG_1 IMG_9') });
+  assert.equal(out.ok, false);
+  assert.match(out.problems.join('\n'), /'IMG_9' is mapped to INV-0010 but no file/);
+});
+
+test('mapping: duplicate view, missing front and every problem are listed together', () => {
+  const root = tmpRepo();
+  put(root, 'intake/IMG_1.jpg', makeJpeg({ tag: '1' }));
+  put(root, 'intake/IMG_2.jpg', makeJpeg({ tag: '2' }));
+  put(root, 'intake/IMG_3.jpg', makeJpeg({ tag: '3' }));
+  const out = ingest(root, { prBody: BODY('INV-0010 back=IMG_1 back=IMG_2', 'INV-0011: IMG_8') });
+  assert.equal(out.ok, false);
+  const text = out.problems.join('\n');
+  assert.match(text, /two photos for view 'back'/);
+  assert.match(text, /'IMG_8' is mapped to INV-0011 but no file/);
+  assert.match(text, /INV-0010: no 'front'/);
+  assert.match(text, /IMG_3\.jpg/);
+});
+
+test('mapping: stems and extensions match case-insensitively', () => {
+  const root = tmpRepo();
+  put(root, 'intake/img_6513.JPEG', makeJpeg({ tag: 'a' }));
+  put(root, 'intake/Img_6514.PNG', makePng());
+  const out = ingest(root, { prBody: BODY('INV-0010: IMG_6513 IMG_6514') });
+  assert.equal(out.ok, true, out.problems.join('\n'));
+  assert.match(idx(root)['INV-0010'].back, /\.png$/);
+});
+
+test('mapping: body text outside fences, junk lines and shell syntax are inert', () => {
+  const root = tmpRepo();
+  put(root, 'intake/IMG_1.jpg', makeJpeg());
+  const body = 'INV-0099: IMG_404\n\n```\nINV-0010: IMG_1\nINV-0011: $(rm -rf /) `x`\n```\n';
+  const out = ingest(root, { prBody: body });
+  assert.equal(out.ok, false);
+  assert.equal(out.problems.length, 1);
+  assert.match(out.problems[0], /could not read the line/);
+  assert.ok(existsSync(join(root, 'intake/IMG_1.jpg')));
+});
+
+test('mapping: the same file listed twice is rejected', () => {
+  const root = tmpRepo();
+  put(root, 'intake/IMG_1.jpg', makeJpeg());
+  const out = ingest(root, { prBody: BODY('INV-0010: IMG_1', 'INV-0011: IMG_1') });
+  assert.equal(out.ok, false);
+  assert.match(out.problems.join('\n'), /listed more than once/);
+});

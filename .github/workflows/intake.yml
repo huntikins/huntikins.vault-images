@@ -1,12 +1,13 @@
 name: Photo intake
 
 # Upload photos to intake/ in a pull request; this workflow scrubs, names,
-# indexes and squash-merges them. Only PRs opened by the owner from a branch in
+# indexes and squash-merges them. Photos are named either by filename
+# (INV-0001-front.jpg) or by a mapping in the PR description. Only PRs opened by the owner from a branch in
 # this repo are processed, and only if they touch nothing but intake/ and the
 # generated image files.
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, edited]
     paths:
       - 'intake/**'
 
@@ -21,6 +22,7 @@ concurrency:
 jobs:
   ingest:
     if: >-
+      github.event.pull_request.state == 'open' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'huntikins'
     runs-on: ubuntu-latest
@@ -66,7 +68,8 @@ jobs:
       - name: Ingest intake/
         run: |
           set +e
-          node scripts/ingest-intake.mjs --report-md /tmp/report.md
+          gh pr view "$PR" --json body --jq .body > /tmp/pr-body.txt
+          node scripts/ingest-intake.mjs --pr-body-file /tmp/pr-body.txt --report-md /tmp/report.md
           rc=$?
           gh pr comment "$PR" --body-file /tmp/report.md
           exit $rc

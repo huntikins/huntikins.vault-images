@@ -2,10 +2,10 @@
 // Publish everything in intake/: scrub metadata, hash-name, file under images/<INV>/,
 // drop replaced views, regenerate index.json / index.html / sitemap.xml. Idempotent.
 //
-//   ingest-intake.mjs [--root .] [--base-url URL] [--raw-base-url URL] [--report-md file] [--report-json file]
+//   ingest-intake.mjs [--root .] [--base-url URL] [--raw-base-url URL] [--report-md file] [--report-json file] [--pr-body-file file]
 //
 // Exit 1 (and no changes) if any intake file is invalid.
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { ingest, renderReport } from './lib/ingest.mjs';
 import { DEFAULT_BASE_URL, DEFAULT_RAW_BASE_URL } from './lib/image-site.mjs';
 
@@ -18,7 +18,9 @@ const root = opt('root', '.');
 const baseUrl = opt('base-url', DEFAULT_BASE_URL);
 const rawBaseUrl = opt('raw-base-url', DEFAULT_RAW_BASE_URL);
 
-const outcome = ingest(root, { baseUrl });
+const bodyPath = opt('pr-body-file');
+const prBody = bodyPath ? readFileSync(bodyPath, 'utf8') : '';
+const outcome = ingest(root, { baseUrl, prBody });
 const md = renderReport(outcome, { baseUrl, rawBaseUrl });
 const mdPath = opt('report-md');
 if (mdPath) writeFileSync(mdPath, md);

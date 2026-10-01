@@ -15,17 +15,34 @@ This repository is **public**. Git history is permanent and may be cached or for
 
 ## Uploading photos for a listing group
 
-Photos arrive as a pull request, so a whole group goes up in one go. Nothing else is needed: a workflow strips hidden location data, names and files the photos, adds them to the index, comments the public URLs, and merges the PR.
+Photos arrive as a pull request, so a whole group goes up in one go. A workflow strips hidden location data, names and files the photos, adds them to the index, comments the public URLs, and merges the PR.
 
-1. Name each photo `INV-NNNN-<view>.jpg` before uploading, for example `INV-0001-front.jpg`, `INV-0001-back.jpg`, `INV-0002-front.jpg`. Phone photos arrive as `IMG_1234.JPG`, so rename them first (Files app: long-press, Rename).
-2. In a browser (on iPhone use Safari; if the Upload option is missing, choose "Request Desktop Website"), open this repo and go into the **`intake`** folder.
-3. **Add file → Upload files**, then choose or drag all the photos for the group.
-4. Under "Commit changes" choose **Create a new branch for this commit and start a pull request**, then **Propose changes** and **Create pull request**.
-5. Wait about a minute. A comment appears on the PR with a table of the public URLs, and the PR merges itself. If something is wrong the comment lists the problems and nothing is published; rename or replace the files in the PR and it re-runs.
+### From the phone (no renaming)
 
-The GitHub mobile app cannot upload files from the camera roll; use the website.
+1. In Safari, open this repo (if the Upload option is missing, choose "Request Desktop Website") and go into the **`intake`** folder.
+2. **Add file, Upload files**, and choose every photo for the group from the camera roll, as they are (`IMG_6513.JPG`, ...).
+3. Under "Commit changes" choose **Create a new branch for this commit and start a pull request**, then **Propose changes**.
+4. On the pull request form, the description is pre-filled with a template. Replace the example lines with one line per item, then **Create pull request**:
 
-### Naming rules
+   ````
+   ```
+   INV-0010: IMG_6513 IMG_6514
+   INV-0011: IMG_6515 IMG_6516 IMG_6517
+   ```
+   ````
+
+   The first photo is `front`, the second `back`, and the rest are `detail-1`, `detail-2`, and so on. To choose views yourself: `INV-0010 front=IMG_6513 back=IMG_6514 corner-tl=IMG_6520`. Use the photo name without the extension; case does not matter.
+5. Wait about a minute. A comment appears with a table of the public URLs and the PR merges itself. If something is wrong, the comment lists every problem and nothing is published. Fix the files or edit the description and it re-runs.
+
+Everything is checked together: a file in `intake/` that is neither listed nor named correctly, a listed name with no file, a duplicate view, or an item with no `front` fails the whole upload.
+
+### Alternative: rename first
+
+Name each photo `INV-NNNN-<view>.jpg` (for example `INV-0001-front.jpg`) before uploading, using the Files app (long-press, Rename). Files named this way need no lines in the description, and the two styles can be mixed in one upload. A file listed in the description uses the description, not its filename.
+
+The GitHub mobile app cannot upload from the camera roll; use the website.
+
+### Naming rules (renamed files)
 
 - `INV-` plus 4 or more digits, a dash, the view, and the extension: `INV-0001-front.jpg`. Case does not matter.
 - Extensions: `.jpg`, `.jpeg`, `.png`. Anything else, including HEIC, is rejected, because it cannot be checked for hidden location data. Set the iPhone camera to "Most Compatible", or convert to JPEG first.

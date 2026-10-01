@@ -1,7 +1,8 @@
 // Turn everything under intake/ into published, scrubbed, hash-named images.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, extname, join, relative } from 'node:path';
+import { parseMapping } from './mapping.mjs';
 import { scrub } from './image-metadata.mjs';
 import { compareIds, compareViews, hash8, isStandardView, parseIntakeName, parsePublishedName, publishedPath, REQUIRED_VIEWS } from './image-naming.mjs';
 import { buildSite, DEFAULT_BASE_URL, DEFAULT_RAW_BASE_URL, withSlash } from './image-site.mjs';
@@ -32,18 +33,39 @@ function pruneEmptyDirs(dir, keep) {
  *
  * @returns {{ok: boolean, problems: string[], warnings: string[], results: Array<{id: string, view: string, path: string, replaced: string[]}>}}
  */
-export function ingest(root, { baseUrl = DEFAULT_BASE_URL } = {}) {
+export function ingest(root, { baseUrl = DEFAULT_BASE_URL, prBody = '' } = {}) {
   const intakeDir = join(root, 'intake');
   const problems = [];
   const warnings = [];
   const planned = new Map();
 
-  for (const file of walk(intakeDir).sort()) {
+  const mapping = parseMapping(prBody);
+  problems.push(...mapping.problems);
+  const files = walk(intakeDir).sort();
+  const byStem = new Map();
+  for (const file of files) {
+    const stem = basename(file, extname(file)).toLowerCase();
+    byStem.set(stem, [...(byStem.get(stem) ?? []), file]);
+  }
+  for (const [stem, entry] of mapping.entries) {
+    const matches = byStem.get(stem) ?? [];
+    if (matches.length === 0) problems.push(`PR description: '${entry.stem}' is mapped to ${entry.id} but no file in intake/ has that name`);
+    if (matches.length > 1) problems.push(`PR description: '${entry.stem}' matches more than one file (${matches.map((f) => relative(root, f)).join(', ')})`);
+  }
+
+  for (const file of files) {
     const rel = relative(root, file);
-    const parsed = parseIntakeName(basename(file));
-    if (!parsed.ok) {
-      problems.push(`${rel}: ${parsed.error}`);
-      continue;
+    const stem = basename(file, extname(file)).toLowerCase();
+    const mapped = mapping.entries.get(stem);
+    let parsed;
+    if (mapped) {
+      parsed = { ok: true, id: mapped.id, view: mapped.view };
+    } else {
+      parsed = parseIntakeName(basename(file));
+      if (!parsed.ok) {
+        problems.push(`${rel}: ${parsed.error} — or list it in the pull request description`);
+        continue;
+      }
     }
     const bytes = readFileSync(file);
     if (bytes.length === 0) {
