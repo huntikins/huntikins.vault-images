@@ -1,11 +1,18 @@
 name: Image metadata check
 
-# Backstop for every path into this repo. Fails if any committed image still
-# carries metadata, is misnamed, or if the generated index is stale.
+# Backstop for every path into this repo. Fails if any committed image is not
+# provably clean (strict parse + signature search), is misnamed, or if the
+# generated index is stale.
+#
+# The vault's private photo intake pushes to main with a deploy key over SSH.
+# That is an ordinary push, so it triggers this workflow (only pushes made with
+# a workflow's own GITHUB_TOKEN do not). The nightly run covers anything else.
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 9 * * *'
   workflow_dispatch:
 
 permissions:

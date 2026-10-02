@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ingest, renderReport } from '../scripts/lib/ingest.mjs';
 import { scanImages } from '../scripts/lib/image-index.mjs';
-import { scrub } from '../scripts/lib/image-metadata.mjs';
+import { checkImage, scrub } from '../scripts/lib/image-metadata.mjs';
 import { hash8, parseIntakeName } from '../scripts/lib/image-naming.mjs';
 import { makeHeic, makeJpeg, makePng, put, tmpRepo } from './fixtures.mjs';
 
@@ -262,4 +263,56 @@ test('mapping: the same file listed twice is rejected', () => {
   const out = ingest(root, { prBody: BODY('INV-0010: IMG_1', 'INV-0011: IMG_1') });
   assert.equal(out.ok, false);
   assert.match(out.problems.join('\n'), /listed more than once/);
+});
+
+test('private intake: a separate intake folder, a re-encode step, raw files left in place', () => {
+  const root = tmpRepo();
+  const vault = mkdtempSync(join(tmpdir(), 'vault-intake-'));
+  put(vault, 'photo-intake/IMG_6513.JPG', makeJpeg({ gps: true, tag: 'raw' }));
+  const seen = [];
+  const out = ingest(root, {
+    intakeDir: join(vault, 'photo-intake'),
+    prBody: '```\nINV-0010: IMG_6513\n```',
+    consume: false,
+    transform: (bytes, { rel, kind }) => {
+      seen.push([rel, kind, bytes.includes(Buffer.from('GPSLatitude'))]);
+      return makeJpeg({ tag: 'reencoded' });
+    },
+  });
+  assert.equal(out.ok, true, out.problems.join('\n'));
+  assert.deepEqual(seen, [['photo-intake/IMG_6513.JPG', 'jpeg', true]]);
+  const bytes = readFileSync(join(root, out.results[0].path));
+  assert.ok(bytes.includes(Buffer.from('pixels-reencoded')));
+  assert.equal(checkImage(bytes).clean, true);
+  assert.ok(existsSync(join(vault, 'photo-intake/IMG_6513.JPG')));
+});
+
+test('private intake: a re-encode that leaves data after EOI, or fails, publishes nothing', () => {
+  for (const transform of [
+    (bytes) => Buffer.concat([makeJpeg(), makeJpeg({ gps: true })]),
+    () => {
+      throw new Error('convert: no decode delegate');
+    },
+  ]) {
+    const root = tmpRepo();
+    put(root, 'intake/INV-0001-front.jpg', makeJpeg());
+    const out = ingest(root, { transform });
+    assert.equal(out.ok, false);
+    assert.match(out.problems.join('\n'), /rejected|re-encoded/);
+    assert.deepEqual(readdirSync(join(root, 'images')), []);
+  }
+});
+
+test('the review cases never reach images/', () => {
+  const fill = Buffer.from(makeJpeg({ gps: true }));
+  const at = fill.indexOf(Buffer.from([0xff, 0xe1]));
+  const withFill = Buffer.concat([fill.subarray(0, at), Buffer.from([0xff]), fill.subarray(at)]);
+  const appended = Buffer.concat([makeJpeg(), makeJpeg({ gps: true })]);
+  for (const bytes of [withFill, appended]) {
+    const root = tmpRepo();
+    put(root, 'intake/INV-0001-front.jpg', bytes);
+    const out = ingest(root);
+    assert.equal(out.ok, false);
+    assert.deepEqual(readdirSync(join(root, 'images')), []);
+  }
 });

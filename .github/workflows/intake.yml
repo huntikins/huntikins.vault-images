@@ -1,94 +1,49 @@
-name: Photo intake
+name: Photo intake (retired)
 
-# Upload photos to intake/ in a pull request; this workflow scrubs, names,
-# indexes and squash-merges them. Photos are named either by filename
-# (INV-0001-front.jpg) or by a mapping in the PR description. Only PRs opened by the owner from a branch in
-# this repo are processed, and only if they touch nothing but intake/ and the
-# generated image files.
+# Photos are never uploaded to this public repository. A raw camera photo
+# carries GPS coordinates, and anything pushed here (even to a PR branch that
+# is later deleted) stays public through refs/pull/N/head and the commit SHA.
+#
+# The owner uploads to the PRIVATE huntikins.vault repo instead (photo-intake/),
+# whose workflow re-encodes and scrubs the photos and pushes only the clean
+# files here. This workflow exists only to refuse anything that still arrives
+# the old way: it comments, fails, and never checks out, processes or merges.
 on:
   pull_request:
-    types: [opened, synchronize, edited]
+    types: [opened, reopened, synchronize]
     paths:
       - 'intake/**'
+      - '**/*.jpg'
+      - '**/*.JPG'
+      - '**/*.jpeg'
+      - '**/*.JPEG'
+      - '**/*.png'
+      - '**/*.PNG'
+      - '**/*.heic'
+      - '**/*.HEIC'
 
 permissions:
-  contents: write
   pull-requests: write
 
-concurrency:
-  group: photo-intake
-  cancel-in-progress: false
-
 jobs:
-  ingest:
-    if: >-
-      github.event.pull_request.state == 'open' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == 'huntikins'
+  refuse:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
-      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      REPO: ${{ github.repository }}
     steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-
-      - name: Refuse PRs that touch anything but photos
+      - name: Refuse and explain
         run: |
-          bad=$(gh pr view "$PR" --json files --jq '.files[].path' \
-            | grep -vE '^(intake/|images/|index\.json$|index\.html$|sitemap\.xml$)' || true)
-          if [ -n "$bad" ]; then
-            printf '### Not an intake-only pull request — not processed\n\nThis workflow only auto-merges changes to `intake/`. These files are outside it:\n\n%s\n' \
-              "$(printf '%s\n' "$bad" | sed 's/^/- `/; s/$/`/')" > /tmp/report.md
-            gh pr comment "$PR" --body-file /tmp/report.md
-            exit 1
-          fi
+          cat > "$RUNNER_TEMP/report.md" <<'MD'
+          ### Photo uploads to this repository are closed — nothing was published
 
-      - name: Bring branch up to date with main
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git fetch origin main
-          git merge --no-edit origin/main || {
-            printf '### Could not update this branch from main\n\nResolve the conflict (or recreate the pull request) and push again.\n' > /tmp/report.md
-            gh pr comment "$PR" --body-file /tmp/report.md
-            exit 1
-          }
+          This repository is public. Photos uploaded here are visible to anyone, including the hidden location data inside them, even after this pull request is closed.
 
-      - name: Ingest intake/
-        run: |
-          set +e
-          gh pr view "$PR" --json body --jq .body > /tmp/pr-body.txt
-          node scripts/ingest-intake.mjs --pr-body-file /tmp/pr-body.txt --report-md /tmp/report.md
-          rc=$?
-          gh pr comment "$PR" --body-file /tmp/report.md
-          exit $rc
+          **Do this now:** close this pull request and delete its branch, then upload the photos to the private vault instead: open `huntikins/huntikins.vault`, go into `photo-intake/`, **Add file → Upload files**, and start a pull request with the same `INV-0010: IMG_6513 IMG_6514` lines. The vault cleans the photos and publishes them here.
 
-      - name: Verify the result
-        run: |
-          node scripts/validate-image-names.mjs images
-          mapfile -t imgs < <(find images -type f \( -iname '*.jpg' -o -iname '*.png' \))
-          [ ${#imgs[@]} -eq 0 ] || node scripts/scrub-image-metadata.mjs --check "${imgs[@]}"
-
-      - name: Commit the result to the PR branch
-        run: |
-          git add -A
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-          else
-            git commit -m "Publish intake photos"
-            git push origin "HEAD:$HEAD_REF"
-          fi
-
-      - name: Squash-merge
-        run: gh pr merge "$PR" --squash --delete-branch --subject "Publish intake photos (#$PR)"
+          Deleting the branch does not remove the commit from GitHub's pull request refs. If these photos had location data, ask GitHub Support to purge this pull request's commits.
+          MD
+          gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/report.md"
+          exit 1

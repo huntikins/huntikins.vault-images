@@ -13,16 +13,17 @@ This repository is **public**. Git history is permanent and may be cached or for
 
 **Never** put prices, costs, notes, card values, order numbers, slot or binder info, or anything else from the private vault in this repo, in a filename, in a PR title or in a commit message.
 
-## Uploading photos for a listing group
+## How photos get here
 
-Photos arrive as a pull request, so a whole group goes up in one go. A workflow strips hidden location data, names and files the photos, adds them to the index, comments the public URLs, and merges the PR.
+**Never upload photos to this repository.** It is public, and a camera photo carries hidden location data. Anything pushed here, even to a pull request branch that is closed and deleted a minute later, stays public through GitHub's pull request refs and the commit SHA.
 
-### From the phone (no renaming)
+This repository exists only so eBay can fetch listing photos. eBay copies each picture URL into its own image host when a listing is created or revised, so this repo just has to serve the photos long enough for that, and for the vault's `index.json` lookup.
 
-1. In Safari, open this repo (if the Upload option is missing, choose "Request Desktop Website") and go into the **`intake`** folder.
-2. **Add file, Upload files**, and choose every photo for the group from the camera roll, as they are (`IMG_6513.JPG`, ...).
-3. Under "Commit changes" choose **Create a new branch for this commit and start a pull request**, then **Propose changes**.
-4. On the pull request form, the description is pre-filled with a template. Replace the example lines with one line per item, then **Create pull request**:
+Photos are uploaded to the **private** `huntikins.vault` repository instead:
+
+1. In Safari, open `huntikins/huntikins.vault` (choose "Request Desktop Website" if the Upload option is missing) and go into **`photo-intake`**.
+2. **Add file, Upload files**, choose every photo for the group from the camera roll as they are (`IMG_6513.JPG`, ...), choose **Create a new branch for this commit and start a pull request**, then **Propose changes**.
+3. In the pull request description, add one line per item inside a code fence, then **Create pull request**:
 
    ````
    ```
@@ -31,22 +32,15 @@ Photos arrive as a pull request, so a whole group goes up in one go. A workflow 
    ```
    ````
 
-   The first photo is `front`, the second `back`, and the rest are `detail-1`, `detail-2`, and so on. To choose views yourself: `INV-0010 front=IMG_6513 back=IMG_6514 corner-tl=IMG_6520`. Use the photo name without the extension; case does not matter.
-5. Wait about a minute. A comment appears with a table of the public URLs and the PR merges itself. If something is wrong, the comment lists every problem and nothing is published. Fix the files or edit the description and it re-runs.
+   The first photo is `front`, the second `back`, the rest `detail-1`, `detail-2`, ... To choose views: `INV-0010 front=IMG_6513 back=IMG_6514 corner-tl=IMG_6520`. Files already named `INV-NNNN-<view>.jpg` need no line.
 
-Everything is checked together: a file in `intake/` that is neither listed nor named correctly, a listed name with no file, a duplicate view, or an item with no `front` fails the whole upload.
+The vault's workflow checks the mapping, re-encodes every photo from its pixels (longest side 1600px, which drops every byte of the original container), strictly scrubs and re-checks the result, and pushes **only the clean files** here as `images/<INV>/<view>-<hash8>.jpg`, with a regenerated `index.json`. It then removes the raw photos from the private pull request, comments the public URLs, and merges it. If anything is wrong it comments the problems and publishes nothing. The vault's `docs/image-standards.md` has the details.
 
-### Alternative: rename first
+A pull request here that adds photos or touches `intake/` is refused by `intake.yml`: it comments and fails, and never processes or merges anything.
 
-Name each photo `INV-NNNN-<view>.jpg` (for example `INV-0001-front.jpg`) before uploading, using the Files app (long-press, Rename). Files named this way need no lines in the description, and the two styles can be mixed in one upload. A file listed in the description uses the description, not its filename.
+### Naming rules
 
-The GitHub mobile app cannot upload from the camera roll; use the website.
-
-### Naming rules (renamed files)
-
-- `INV-` plus 4 or more digits, a dash, the view, and the extension: `INV-0001-front.jpg`. Case does not matter.
-- Extensions: `.jpg`, `.jpeg`, `.png`. Anything else, including HEIC, is rejected, because it cannot be checked for hidden location data. Set the iPhone camera to "Most Compatible", or convert to JPEG first.
-- Every item needs a `front`. Views, in listing order (`front` becomes the gallery image):
+- Views, in listing order (`front` becomes the gallery image, and every item needs one):
 
   | Order | View |
   |---|---|
@@ -59,8 +53,8 @@ The GitHub mobile app cannot upload from the camera roll; use the website.
   | 15+ | `detail-1` ... `detail-99` |
 
   Other view names are still published, ordered last.
-- Subfolders inside `intake/` are fine (`intake/may-batch/INV-0001-front.jpg`).
-- One photo per item and view per upload. Uploading a view that already exists **replaces** it: the old file is deleted from the current tree (git history keeps it) and the new one gets a new URL.
+- Only JPEG and PNG are accepted. HEIC is rejected, because it cannot be checked for hidden location data; set the iPhone camera to "Most Compatible".
+- Uploading a view that already exists **replaces** it: the old file leaves the current tree (git history keeps it) and the new one gets a new URL.
 
 ## URLs
 
@@ -82,12 +76,12 @@ https://raw.githubusercontent.com/huntikins/huntikins.vault-images/main/images/<
 
 ## Scripts
 
-Dependency-free Node 22 ESM.
+Dependency-free Node 22 ESM. `scripts/` is the single source of truth for the image library; `huntikins.vault` vendors an exact copy (`vendor/vault-images/scripts/`) and its intake workflow refuses to publish if that copy differs from this repo's `main`.
 
 | Script | Purpose |
 |---|---|
-| `scripts/ingest-intake.mjs` | Publish everything in `intake/`; all-or-nothing, idempotent |
-| `scripts/scrub-image-metadata.mjs` | Strip (or `--check`) EXIF/GPS, XMP, IPTC, comments from JPEG and PNG |
+| `scripts/lib/ingest.mjs` | Publish an intake folder into `images/`; all-or-nothing, idempotent. Called by the vault's private intake |
+| `scripts/scrub-image-metadata.mjs` | Strip (or `--check`) EXIF/GPS, XMP, IPTC, MPF, comments from JPEG and PNG. Fails closed: anything not cleanly parsed is rejected, never passed through |
 | `scripts/validate-image-names.mjs` | Check `images/` naming and that each hash matches its file |
 | `scripts/build-image-site.mjs` | Regenerate `index.json`, `index.html`, `sitemap.xml` |
 
@@ -95,7 +89,7 @@ Run `npm test` for the unit tests.
 
 ## Workflows
 
-- `intake.yml` runs on pull requests from `huntikins` touching `intake/**`, from a branch in this repo (never a fork). It refuses PRs that change anything besides `intake/` and generated image files.
-- `scrub-check.yml` is a backstop on every push to `main` and every PR: unit tests, metadata check, naming and hash check, stale-index check.
+- `intake.yml` refuses every pull request that adds photos or touches `intake/`: it comments a pointer to the private flow and fails. It never checks out, processes or merges anything.
+- `scrub-check.yml` is the backstop on every push to `main` (including the vault's deploy-key pushes), every PR, and nightly: unit tests, strict metadata check, naming and hash check, stale-index check.
 
 Actions are pinned to full commit SHAs.
