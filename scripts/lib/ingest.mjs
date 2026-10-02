@@ -1,9 +1,13 @@
-// Turn everything under intake/ into published, scrubbed, hash-named images.
+// Turn a folder of intake photos into published, scrubbed, hash-named images.
+//
+// Used by the private intake in huntikins.vault (photos are uploaded there, never
+// here), which vendors this directory. Raw photos therefore never reach this
+// public repository: only the cleaned bytes this function writes do.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, relative } from 'node:path';
 import { parseMapping } from './mapping.mjs';
-import { scrub } from './image-metadata.mjs';
+import { checkImage, kindOf, scrub } from './image-metadata.mjs';
 import { compareIds, compareViews, hash8, isStandardView, parseIntakeName, parsePublishedName, publishedPath, REQUIRED_VIEWS } from './image-naming.mjs';
 import { buildSite, DEFAULT_BASE_URL, DEFAULT_RAW_BASE_URL, withSlash } from './image-site.mjs';
 
@@ -28,13 +32,21 @@ function pruneEmptyDirs(dir, keep) {
 }
 
 /**
- * Ingest intake/ into images/. All-or-nothing: if any file is invalid, nothing
- * on disk changes and the problems are returned.
+ * Ingest the intake folder into root/images/. All-or-nothing: if any file is
+ * invalid, nothing on disk changes and the problems are returned.
+ *
+ * Options:
+ * - intakeDir: where the raw photos are (default root/intake).
+ * - transform(bytes, {rel, kind}): re-encode the pixels (resize, drop every
+ *   container byte) before scrubbing. Must return a JPEG or PNG Buffer.
+ * - consume: delete each intake file once published (default true).
+ *
+ * Whatever comes out of the transform is strictly scrubbed and then checked
+ * independently; a file that is not cleanly parsed is rejected, never passed.
  *
  * @returns {{ok: boolean, problems: string[], warnings: string[], results: Array<{id: string, view: string, path: string, replaced: string[]}>}}
  */
-export function ingest(root, { baseUrl = DEFAULT_BASE_URL, prBody = '' } = {}) {
-  const intakeDir = join(root, 'intake');
+export function ingest(root, { baseUrl = DEFAULT_BASE_URL, prBody = '', intakeDir = join(root, 'intake'), transform = null, consume = true } = {}) {
   const problems = [];
   const warnings = [];
   const planned = new Map();
@@ -47,14 +59,16 @@ export function ingest(root, { baseUrl = DEFAULT_BASE_URL, prBody = '' } = {}) {
     const stem = basename(file, extname(file)).toLowerCase();
     byStem.set(stem, [...(byStem.get(stem) ?? []), file]);
   }
+  const intakeName = basename(intakeDir);
+  const relName = (f) => `${intakeName}/${relative(intakeDir, f)}`;
   for (const [stem, entry] of mapping.entries) {
     const matches = byStem.get(stem) ?? [];
-    if (matches.length === 0) problems.push(`PR description: '${entry.stem}' is mapped to ${entry.id} but no file in intake/ has that name`);
-    if (matches.length > 1) problems.push(`PR description: '${entry.stem}' matches more than one file (${matches.map((f) => relative(root, f)).join(', ')})`);
+    if (matches.length === 0) problems.push(`PR description: '${entry.stem}' is mapped to ${entry.id} but no file in ${intakeName}/ has that name`);
+    if (matches.length > 1) problems.push(`PR description: '${entry.stem}' matches more than one file (${matches.map(relName).join(', ')})`);
   }
 
   for (const file of files) {
-    const rel = relative(root, file);
+    const rel = relName(file);
     const stem = basename(file, extname(file)).toLowerCase();
     const mapped = mapping.entries.get(stem);
     let parsed;
@@ -67,18 +81,32 @@ export function ingest(root, { baseUrl = DEFAULT_BASE_URL, prBody = '' } = {}) {
         continue;
       }
     }
-    const bytes = readFileSync(file);
+    let bytes = readFileSync(file);
     if (bytes.length === 0) {
       problems.push(`${rel}: file is empty`);
       continue;
     }
-    const result = scrub(bytes);
-    if (result.unsupported) {
-      problems.push(`${rel}: this is a ${result.kind} file, not a JPEG or PNG — it cannot be checked for hidden location data. Convert it to JPEG first`);
+    const kind = kindOf(bytes);
+    if (kind !== 'jpeg' && kind !== 'png') {
+      problems.push(`${rel}: this is a ${kind} file, not a JPEG or PNG — it cannot be checked for hidden location data. Convert it to JPEG first`);
       continue;
     }
-    if (scrub(result.out).removed.length > 0) {
-      problems.push(`${rel}: metadata could not be fully removed`);
+    if (transform) {
+      try {
+        bytes = transform(bytes, { rel, kind });
+      } catch (err) {
+        problems.push(`${rel}: could not be re-encoded (${String(err?.message ?? err).split('\n')[0].slice(0, 200)})`);
+        continue;
+      }
+    }
+    const result = scrub(bytes);
+    if (result.unsupported || result.rejected) {
+      problems.push(`${rel}: rejected — ${result.rejected ?? `${result.kind} output`}; nothing from this file is published`);
+      continue;
+    }
+    const check = checkImage(result.out);
+    if (!check.clean) {
+      problems.push(`${rel}: metadata could not be fully removed (${check.problems.join('; ')})`);
       continue;
     }
     const ext = result.kind === 'png' ? 'png' : 'jpg';
@@ -119,10 +147,10 @@ export function ingest(root, { baseUrl = DEFAULT_BASE_URL, prBody = '' } = {}) {
       }
     }
     writeFileSync(join(root, dest), p.out);
-    rmSync(p.file);
+    if (consume) rmSync(p.file);
     results.push({ id: p.id, view: p.view, path: dest, replaced, stripped: p.stripped });
   }
-  if (existsSync(intakeDir)) pruneEmptyDirs(intakeDir, true);
+  if (consume && existsSync(intakeDir)) pruneEmptyDirs(intakeDir, true);
 
   const site = buildSite(root, baseUrl);
   return { ok: site.problems.length === 0, problems: site.problems, warnings, results };
